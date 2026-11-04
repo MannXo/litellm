@@ -128,9 +128,38 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
-def _starts_content_block(event: object) -> bool:
+_SSE_DATA_PAYLOAD: Final = TypeAdapter(Mapping[str, object])
+_EMPTY_FIELD_VALUES: Final[tuple[object, ...]] = ("", [], {}, None)
+
+
+def _content_part_carries_output(part: object) -> bool:
+    if not isinstance(part, Mapping):
+        return False
+    fields: Final = _SSE_DATA_PAYLOAD.validate_python(part)
+    return any(key != "type" and value not in _EMPTY_FIELD_VALUES for key, value in fields.items())
+
+
+def _sse_data_carries_output(data: str) -> bool:
+    try:
+        payload: Final = _SSE_DATA_PAYLOAD.validate_json(data)
+    except ValidationError:
+        return False
+    match payload.get("type"):
+        case "content_block_start":
+            return _content_part_carries_output(payload.get("content_block"))
+        case "content_block_delta":
+            return _content_part_carries_output(payload.get("delta"))
+        case _:
+            return False
+
+
+def _stream_event_carries_output(event: object) -> bool:
     text: Final = event.decode("utf-8", errors="replace") if isinstance(event, bytes) else event
-    return isinstance(text, str) and "event: content_block_start" in text.splitlines()
+    if not isinstance(text, str):
+        return False
+    return any(
+        _sse_data_carries_output(line.removeprefix("data:")) for line in text.splitlines() if line.startswith("data:")
+    )
 
 
 def is_response_without_output(result: object) -> bool:
@@ -142,7 +171,7 @@ def is_response_without_output(result: object) -> bool:
         return False
     cached_stream_events: Final = result.get(CACHED_STREAM_EVENTS_KEY)
     if isinstance(cached_stream_events, (list, tuple)):
-        return not any(_starts_content_block(event) for event in cached_stream_events)
+        return not any(_stream_event_carries_output(event) for event in cached_stream_events)
     if "choices" in result:
         return not result["choices"]
     if result.get("object") == "response":

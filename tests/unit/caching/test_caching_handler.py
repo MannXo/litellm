@@ -2765,6 +2765,19 @@ def _anthropic_stream_without_content_blocks() -> dict[str, object]:
     }
 
 
+def _anthropic_stream_with_an_empty_text_block() -> dict[str, object]:
+    return {
+        CACHED_STREAM_EVENTS_KEY: [
+            'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_1", "content": []}}\n\n',
+            'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, '
+            '"content_block": {"type": "text", "text": ""}}\n\n',
+            'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n',
+            'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}\n\n',
+            'event: message_stop\ndata: {"type": "message_stop"}\n\n',
+        ]
+    }
+
+
 EmptyResult = ModelResponse | TextCompletionResponse | ResponsesAPIResponse | dict[str, object]
 EmptyResponseCase = tuple[EmptyResult, Callable[..., Awaitable[object]], str, dict[str, object]]
 
@@ -2810,6 +2823,12 @@ def _empty_response_cases() -> list[EmptyResponseCase]:
         ),
         (
             _anthropic_stream_without_content_blocks(),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
+        ),
+        (
+            _anthropic_stream_with_an_empty_text_block(),
             aanthropic_messages,
             CallTypes.aanthropic_messages.value,
             {"messages": _unique_messages(), "max_tokens": 16, "stream": True},

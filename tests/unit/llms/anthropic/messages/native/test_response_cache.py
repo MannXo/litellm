@@ -164,9 +164,23 @@ async def test_streaming_cache_is_not_shared_with_non_streaming(local_cache, req
     assert non_streaming["content"][0]["text"] == "ALPHA"
 
 
+EMPTY_TEXT_DELTA: Final = (
+    b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+    b'"delta": {"type": "text_delta", "text": ""}}\n\n'
+)
+
+
+@pytest.mark.parametrize(
+    "empty_events",
+    [
+        [STREAM_EVENTS[0], STREAM_EVENTS[4], STREAM_EVENTS[5]],
+        [STREAM_EVENTS[0], STREAM_EVENTS[1], STREAM_EVENTS[3], STREAM_EVENTS[4], STREAM_EVENTS[5]],
+        [STREAM_EVENTS[0], STREAM_EVENTS[1], EMPTY_TEXT_DELTA, *STREAM_EVENTS[3:]],
+    ],
+    ids=["no_content_block", "empty_text_block", "empty_text_delta"],
+)
 @pytest.mark.asyncio
-async def test_stream_without_content_blocks_is_not_cached(local_cache, request_kwargs, monkeypatch):
-    empty_events = [STREAM_EVENTS[0], STREAM_EVENTS[4], STREAM_EVENTS[5]]
+async def test_stream_without_output_is_not_cached(local_cache, request_kwargs, monkeypatch, empty_events):
     fake_handler = _CountingHandler(
         [_byte_stream(empty_events), _byte_stream(STREAM_EVENTS), _byte_stream([b"event: never_used\n\n"])]
     )
@@ -182,6 +196,29 @@ async def test_stream_without_content_blocks_is_not_cached(local_cache, request_
     assert refilled == STREAM_EVENTS
     assert replayed == STREAM_EVENTS
     assert len(fake_handler.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_with_only_an_argumentless_tool_call_is_replayed_from_cache(
+    local_cache, request_kwargs, monkeypatch
+):
+    tool_events = [
+        STREAM_EVENTS[0],
+        b'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, '
+        b'"content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_time", "input": {}}}\n\n',
+        b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+        b'"delta": {"type": "input_json_delta", "partial_json": ""}}\n\n',
+        *STREAM_EVENTS[3:],
+    ]
+    fake_handler = _CountingHandler([_byte_stream(tool_events), _byte_stream([b"event: never_used\n\n"])])
+    monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
+
+    await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    await asyncio.sleep(0)
+    replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+
+    assert len(fake_handler.calls) == 1
+    assert replayed == tool_events
 
 
 @pytest.mark.asyncio
